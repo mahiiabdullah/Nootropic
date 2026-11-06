@@ -1,0 +1,62 @@
+[project]
+name = "neurovex"
+version = "0.1.0"
+description = "Neurovex: a personal AI operating system. First module: News."
+readme = "PLAN.md"
+requires-python = ">=3.12"
+dependencies = [
+    "aiosqlite>=0.22.1",
+    "anthropic>=1.12.1",
+    "fastapi>=0.143.0",
+    "feedparser>=6.0.14",
+    "httpx>=0.28.1",
+    "keyring>=25.7.0",
+    "pydantic>=2.14.0",
+    "pydantic-settings>=2.15.0",
+    "python-dotenv>=1.2.4",
+    "rich>=15.0.0",
+    "sqlalchemy[asyncio]>=2.1.4",
+    "structlog>=26.1.0",
+    "trafilatura>=2.3.1",
+    "typer>=0.27.3",
+    "uvicorn[standard]>=0.54.0",
+    "x-tweet-fetcher",
+]
+
+[project.scripts]
+nvx = "neurovex.cli:app"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["neurovex"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
+pythonpath = ["."]
+filterwarnings = ["ignore::DeprecationWarning:feedparser.*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "ASYNC", "SIM"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["E501"]
+
+[tool.uv.sources]
+x-tweet-fetcher = { git = "https://github.com/ythx-101/x-tweet-fetcher", rev = "17db968087eaeaf2c0c0683bdede9db8cdc276ea" }
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+    "respx>=0.23.1",
+    "ruff>=0.16.10",
+]

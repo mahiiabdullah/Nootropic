@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
+
+# Secrets & local config
+.env
+*.local
+
+# Neurovex data (normally lives in %LOCALAPPDATA%\Neurovex, never in the repo)
+data/
+*.db
+*.db-wal
+*.db-shm
+
+# Node / Tauri (Phase 3)
+node_modules/
+shell/src-tauri/target/
+
+# Editors / OS
+.vscode/*
+!.vscode/extensions.json
+.idea/
+Thumbs.db
+.DS_Store

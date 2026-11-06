@@ -1,0 +1,4 @@
+# Store text with LF so the code also runs cleanly on a Linux server.
+* text=auto
+*.cmd text eol=crlf
+uv.lock linguist-generated=true
