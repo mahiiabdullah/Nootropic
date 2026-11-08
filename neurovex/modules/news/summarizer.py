@@ -223,7 +223,8 @@ class Summarizer(Protocol):
     async def write_briefing(self, request: BriefingRequest) -> BriefingDraft: ...
 
 
-MAX_ARTICLE_CHARS = 8_000  # ~2.2k tokens: the opening carries the news, and it fits Groq's 8K TPM
+# ~1.1k tokens: the opening carries the news. Halved from 8,000 to save input tokens.
+MAX_ARTICLE_CHARS = 4_000
 # Sized to real output (median ~400, max seen ~670 tokens): providers like Groq charge the
 # full max_tokens against their per-minute budget up front.
 SUMMARY_MAX_TOKENS = 1_000

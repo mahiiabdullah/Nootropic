@@ -12,13 +12,18 @@ Both are third-party with no uptime promise: if reading fails, the source's row 
 the rest of the news keeps working. Only public accounts can be read.
 
 Only an account's own posts are kept (no replies or reposts). Each new post costs one
-summary from the AI provider, so accounts are checked at most every `x_refresh_minutes`
-and at most `x_max_posts_per_check` new posts are taken each time.
+summary from the AI provider, so at most `x_max_posts_per_check` new posts are taken each time.
+
+How often an account is checked follows how recently it posted: every `x_refresh_minutes` if
+it posted in the last day, down to every 12x that if it's been quiet for a week. Its first
+new post puts it straight back on the fast schedule. The accounts that are due are spread
+across news runs (`pick_due`), so no single run waits on all of them.
 """
 
 from __future__ import annotations
 
 import asyncio
+import math
 import re
 import time
 from datetime import UTC, datetime, timedelta
@@ -61,6 +66,9 @@ _NOT_ACCOUNTS = {
     "intent",
 }
 _LINK = re.compile(r"https?://\S+")
+# (posted within, check every N x `x_refresh_minutes`); quieter than all of these: QUIET_FACTOR
+ACTIVITY_TIERS = ((timedelta(days=1), 1), (timedelta(days=3), 2), (timedelta(days=7), 6))
+QUIET_FACTOR = 12
 
 
 class XError(Exception):
@@ -142,14 +150,49 @@ def post_to_entry(post: dict[str, Any], handle: str) -> FeedEntry:
     if quoted := post_text(quote):  # "Interesting" means little without what it's quoting
         who = (quote.get("author") or {}).get("screen_name") or "someone"
         text += f"\n\nQuoting @{who}: {quoted}"
-    stamp = post.get("created_timestamp") or ((int(post["id"]) >> 22) + TWITTER_EPOCH_MS) / 1000
+    stamp = post.get("created_timestamp")
     return FeedEntry(
         url=f"https://x.com/{handle}/status/{post['id']}",
         title=title or f"Post by @{handle}",
         author=f"@{handle}",
-        published_at=datetime.fromtimestamp(stamp, UTC),
+        published_at=datetime.fromtimestamp(stamp, UTC) if stamp else post_time(post["id"]),
         excerpt=text or None,
     )
+
+
+def post_time(post_id: str | int) -> datetime:
+    """When a post was made: X post ids carry their creation time."""
+    return datetime.fromtimestamp(((int(post_id) >> 22) + TWITTER_EPOCH_MS) / 1000, UTC)
+
+
+def check_every(src: Source, settings: Settings, now: datetime) -> timedelta:
+    """How long to wait between checks of this account, from how recently it posted."""
+    base = timedelta(minutes=settings.x_refresh_minutes)
+    if not src.x_since_id:  # no post of its own seen yet
+        return base * QUIET_FACTOR
+    quiet_for = now - post_time(src.x_since_id)
+    for within, factor in ACTIVITY_TIERS:
+        if quiet_for < within:
+            return base * factor
+    return base * QUIET_FACTOR
+
+
+def is_due(src: Source, settings: Settings, now: datetime) -> bool:
+    return src.x_checked_at is None or now - src.x_checked_at >= check_every(src, settings, now)
+
+
+def checks_per_run(settings: Settings, accounts: int) -> int:
+    """Enough checks per news run to get through every account once per `x_refresh_minutes`."""
+    runs = max(settings.x_refresh_minutes / settings.news_refresh_minutes, 1)
+    return max(math.ceil(accounts / runs), 1)
+
+
+def pick_due(sources: list[Source], settings: Settings, now: datetime) -> list[Source]:
+    """The accounts to check this run: due ones, longest-waiting first, at most one run's share."""
+    due = [s for s in sources if is_due(s, settings, now)]
+    oldest = datetime.min.replace(tzinfo=UTC)
+    due.sort(key=lambda s: s.x_checked_at or oldest)
+    return due[: checks_per_run(settings, len(sources))]
 
 
 def new_posts(
@@ -192,9 +235,8 @@ class XReader:
         if handle is None:
             raise XError(f"Not an X account: {src.url}")
         now = utcnow()
-        every = timedelta(minutes=self.settings.x_refresh_minutes)
-        if src.x_checked_at is not None and now - src.x_checked_at < every:
-            return FeedResult(304, [], None, None, src.last_error)  # not due: nothing changes
+        if not is_due(src, self.settings, now):
+            return self.not_due(src)
 
         async with self._lock:
             if (wait := self._last_call + MIN_GAP_S - time.monotonic()) > 0:
@@ -214,8 +256,13 @@ class XReader:
                 if posts:
                     row.x_since_id = posts[0]["id"]
                 await s.commit()
-        log.info("news_x_checked", account=handle, new=len(posts))
+        (log.info if posts else log.debug)("news_x_checked", account=handle, new=len(posts))
         return FeedResult(200, [post_to_entry(p, handle) for p in posts], None, None)
+
+    @staticmethod
+    def not_due(src: Source) -> FeedResult:
+        """Not checked this time: nothing about the source changes."""
+        return FeedResult(304, [], None, None, src.last_error)
 
     async def _timeline(self, handle: str) -> list[dict[str, Any]]:
         """Recent posts: through your own Nitter if you set one, otherwise FxTwitter."""

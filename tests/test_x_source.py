@@ -13,7 +13,10 @@ from neurovex.modules.news.models import Article, ArticleStatus, Source
 from neurovex.modules.news.module import NewsModule
 from neurovex.modules.news.xsource import (
     API,
+    QUIET_FACTOR,
     TWITTER_EPOCH_MS,
+    check_every,
+    checks_per_run,
     from_xtf_tweet,
     is_own_post,
     is_x_source,
@@ -22,6 +25,7 @@ from neurovex.modules.news.xsource import (
     needs_full_post,
     new_posts,
     parse_handle,
+    pick_due,
     post_to_entry,
     source_url,
 )
@@ -29,7 +33,14 @@ from tests.conftest import FakeSummarizer
 from tests.test_api import HEADERS, client, wait_for_idle  # noqa: F401  (fixture)
 
 STATUSES = f"{API}/profile/OpenAI/statuses"
-RECENT_ID = str((int(utcnow().timestamp() * 1000) - TWITTER_EPOCH_MS) << 22)  # a post from now
+
+
+def id_from(ago: timedelta) -> str:
+    """A post id made `ago` before now (ids carry their creation time)."""
+    return str((int((utcnow() - ago).timestamp() * 1000) - TWITTER_EPOCH_MS) << 22)
+
+
+RECENT_ID = id_from(timedelta(0))  # a post from now
 
 
 def post(id_: str, text: str, **kw) -> dict:
@@ -148,13 +159,73 @@ async def test_reads_new_posts_only_and_respects_the_interval(news, sessions):
     await news.pipeline.run()  # within the interval: not even a request
     assert route.call_count == 1
 
-    async with sessions() as s:
-        row = await s.get(Source, src.id)
-        row.x_checked_at = utcnow() - timedelta(minutes=31)
-        await s.commit()
+    async def checked(ago: timedelta) -> None:
+        async with sessions() as s:
+            row = await s.get(Source, src.id)
+            row.x_checked_at = utcnow() - ago
+            await s.commit()
+
+    # Its newest post (id 101) is years old, so it's a quiet account: checked every 6 hours.
+    await checked(timedelta(minutes=31))
+    await news.pipeline.run()
+    assert route.call_count == 1
+    await checked(timedelta(minutes=30 * QUIET_FACTOR + 1))
     run = await news.pipeline.run()
     assert route.call_count == 2 and run.articles_new == 1
     assert (await _source(sessions)).x_since_id == "102"
+
+
+@pytest.mark.parametrize(
+    ("last_post", "every_minutes"),
+    [
+        (timedelta(hours=3), 30),  # posts daily: every x_refresh_minutes
+        (timedelta(days=2), 60),
+        (timedelta(days=5), 180),
+        (timedelta(days=20), 360),  # quiet for weeks: every 6 hours
+        (None, 360),  # never seen a post of its own
+    ],
+)
+def test_quiet_accounts_are_checked_less_often(settings, last_post, every_minutes):
+    src = Source(name="@a", url="https://x.com/a", x_since_id=last_post and id_from(last_post))
+    assert check_every(src, settings, utcnow()) == timedelta(minutes=every_minutes)
+
+
+def test_due_accounts_are_spread_across_runs(settings):
+    now = utcnow()
+    assert checks_per_run(settings, 299) == 100  # 30-minute checks, 10-minute runs: a third each
+    fresh = timedelta(hours=1)  # an account that posted an hour ago is due after 30 minutes
+    accounts = [
+        Source(id=i, name=f"@a{i}", url=f"https://x.com/a{i}", x_since_id=id_from(fresh),
+               x_checked_at=None if i == 0 else now - timedelta(minutes=30 + i))
+        for i in range(9)
+    ]  # fmt: skip
+    accounts.append(Source(id=99, name="@b", url="https://x.com/b", x_since_id=id_from(fresh),
+                           x_checked_at=now - timedelta(minutes=5)))  # fmt: skip
+    picked = pick_due(accounts, settings, now)
+    # A share of 10 accounts is 4; never-checked first, then whoever waited longest; @b isn't due.
+    assert [s.id for s in picked] == [0, 8, 7, 6]
+
+
+@respx.mock
+async def test_a_run_checks_only_its_share_of_accounts(settings, sessions):
+    async def factory(_s, _h):
+        return FakeSummarizer()
+
+    module = NewsModule(settings, sessions, factory)
+    async with sessions() as s:
+        s.add_all(Source(name=f"@acct{i}", url=f"https://x.com/acct{i}") for i in range(6))
+        await s.commit()
+    route = respx.get(url__regex=rf"{API}/profile/acct\d/statuses").respond(
+        200, json={"results": []}
+    )
+    await module.pipeline.run()
+    assert route.call_count == 2  # 6 accounts, every 30 minutes, runs every 10: 2 per run
+    await module.pipeline.run()
+    assert route.call_count == 4  # the next run takes the next two, not the same ones
+    async with sessions() as s:
+        checked = await s.scalars(select(Source.name).where(Source.x_checked_at.is_not(None)))
+        assert len(set(checked)) == 4
+    await module.stop()
 
 
 @respx.mock

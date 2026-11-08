@@ -36,7 +36,7 @@ from neurovex.modules.news.summarizer import (
     SummarizerFactory,
 )
 from neurovex.modules.news.urls import canonicalize_url, title_fingerprint
-from neurovex.modules.news.xsource import XReader, is_x_source, is_x_url
+from neurovex.modules.news.xsource import XReader, is_x_source, is_x_url, pick_due
 
 log = get_logger(__name__)
 
@@ -200,15 +200,18 @@ class NewsPipeline:
         async with self.sessions() as s:
             sources = list(await s.scalars(select(Source).where(Source.enabled.is_(True))))
         sem = asyncio.Semaphore(FEED_CONCURRENCY)
+        x_now = {s.id for s in pick_due([s for s in sources if is_x_source(s.url)],
+                                        self.settings, utcnow())}  # fmt: skip
 
         async def fetch(src: Source) -> fetcher.FeedResult | Exception:
-            async with sem:
-                try:
-                    if is_x_source(src.url):
-                        return await self.x.fetch(src)
+            try:
+                if is_x_source(src.url):
+                    # X reads queue on their own lock, so they never hold up the feeds' slots.
+                    return await self.x.fetch(src) if src.id in x_now else self.x.not_due(src)
+                async with sem:
                     return await fetcher.fetch_feed(self.http, src.url, src.etag, src.last_modified)
-                except Exception as e:  # one broken feed must not stop the others
-                    return e
+            except Exception as e:  # one broken feed must not stop the others
+                return e
 
         results = await asyncio.gather(*(fetch(src) for src in sources))
         for src, result in zip(sources, results, strict=True):
