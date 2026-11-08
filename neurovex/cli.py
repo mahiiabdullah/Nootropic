@@ -29,6 +29,8 @@ llm_app = typer.Typer(help="AI providers: status, tests, models, setup.", no_arg
 memory_app = typer.Typer(help="What Neurovex remembers about you.", no_args_is_help=True)
 tasks_app = typer.Typer(help="Your tasks: add, list, done, what's next.")
 autostart_app = typer.Typer(help="Start Neurovex when you sign in (Windows).", no_args_is_help=True)
+routines_app = typer.Typer(help="Routines you taught: list or delete them.")
+audit_app = typer.Typer(help="A tamper-evident record of what Neurovex did.", no_args_is_help=True)
 app.add_typer(news_app, name="news")
 news_app.add_typer(sources_app, name="sources")
 app.add_typer(secrets_app, name="secrets")
@@ -36,6 +38,8 @@ app.add_typer(llm_app, name="llm")
 app.add_typer(memory_app, name="memory")
 app.add_typer(tasks_app, name="tasks")
 app.add_typer(autostart_app, name="autostart")
+app.add_typer(audit_app, name="audit")
+app.add_typer(routines_app, name="routines")
 
 SERVER_LOG_MAX_BYTES = 5 * 2**20
 
@@ -82,6 +86,23 @@ def _run_with_news[T](fn: Callable[..., Awaitable[T]]) -> T:
         finally:
             await news.stop()
             await router.aclose()
+            await engine.dispose()
+
+    return asyncio.run(main())
+
+
+def _with_db[T](fn: Callable[..., Awaitable[T]]) -> T:
+    """Run `fn(sessions)` against the database, for commands that need nothing else."""
+    settings = get_settings()
+    settings.ensure_dirs()
+    configure_logging(settings.model_copy(update={"log_level": "WARNING"}))
+
+    async def main() -> T:
+        engine = create_engine(settings.db_url)
+        await init_db(engine)
+        try:
+            return await fn(create_sessionmaker(engine))
+        finally:
             await engine.dispose()
 
     return asyncio.run(main())
@@ -190,6 +211,21 @@ def doctor() -> None:
     except ImportError:
         pass
     row("News summaries", True, f"news_llm_provider = {settings.news_llm_provider}")
+
+    from neurovex.security.auth import TOKEN_NAME, load_api_token
+
+    token_where = settings.secret_source(TOKEN_NAME) or (
+        "file" if load_api_token(settings, create=False) else None
+    )
+    row("Sign-in", True if token_where else None,
+        f"API token in {token_where}" if token_where else "made on first `nvx serve`")  # fmt: skip
+
+    from neurovex.security.audit import AuditLog
+
+    verdict = _with_db(lambda sessions: AuditLog(sessions).verify())
+    row("Audit log", verdict.ok,
+        f"{verdict.entries} entries, chain intact" if verdict.ok
+        else f"broken at entry {verdict.first_bad_id}: run `nvx audit verify`")  # fmt: skip
 
     from neurovex.core.backup import last_backup_at
 
@@ -328,6 +364,131 @@ def secrets_status() -> None:
     for name in names:
         found = settings.secret(name)
         console.print(f"{name:<24} {'[green]set[/]' if found else '[dim]not set[/]'}")
+
+
+@secrets_app.command("list")
+def secrets_list() -> None:
+    """Every key Neurovex knows, whether it's set and where (never prints values)."""
+    from neurovex.llm.catalog import PROVIDERS
+    from neurovex.security.auth import TOKEN_NAME, load_api_token
+
+    settings = get_settings()
+    names = [TOKEN_NAME]
+    for spec in PROVIDERS.values():
+        names += [n for n in (spec.key_env, *spec.alt_key_envs, spec.account_env) if n]
+    for name in dict.fromkeys(names):
+        where = settings.secret_source(name)
+        if name == TOKEN_NAME and not where and load_api_token(settings, create=False):
+            where = "file in the data folder"
+        console.print(f"{name:<26} {f'[green]set[/] ({where})' if where else '[dim]not set[/]'}")
+
+
+# --- sign-in --------------------------------------------------------------------
+
+
+@app.command()
+def signin() -> None:
+    """A one-time link and code to sign a browser in (works once, for 10 minutes)."""
+    from neurovex.security.auth import AuthService, normalize_code
+
+    settings = get_settings()
+    made = _with_db(lambda sessions: AuthService(settings, sessions).create_code())
+    link = f"http://127.0.0.1:{settings.port}/signin?code={normalize_code(made.code)}"
+    console.print(f"On this PC, open:  [bold]{link}[/]")
+    console.print(f"On another device, type this code on the sign-in screen:  [bold]{made.code}[/]")
+    console.print("[dim]Works once, for the next 10 minutes. Neurovex must be running.[/]")
+
+
+@app.command()
+def token(
+    new: Annotated[bool, typer.Option("--new", help="Make a new token; the old one stops")] = False,
+) -> None:
+    """Print the API token, for scripts: send it as `Authorization: Bearer <token>`."""
+    import secrets as pysecrets
+
+    from neurovex.security.auth import load_api_token, store_api_token
+
+    settings = get_settings()
+    configure_logging(settings.model_copy(update={"log_level": "WARNING"}))  # stdout = the token
+    if new:
+        where = store_api_token(settings, pysecrets.token_urlsafe(32))
+        console.print(f"[green]New token saved[/] ({where}). Signed-in browsers stay signed in;")
+        console.print("scripts need the new one (the server switches within a minute).")
+    console.print(load_api_token(settings), markup=False, highlight=False, soft_wrap=True)
+
+
+# --- routines -------------------------------------------------------------------
+
+
+@routines_app.callback(invoke_without_command=True)
+def routines_list(ctx: typer.Context) -> None:
+    """List your routines. Teach one in chat: "when I say start my day, do X then Y"."""
+    if ctx.invoked_subcommand:
+        return
+    from neurovex.routines.skills import describe
+    from neurovex.routines.store import RoutineStore
+
+    rows = _with_db(lambda sessions: RoutineStore(sessions).list())
+    if not rows:
+        console.print('[dim]No routines yet. In chat: "When I say start my day, show my day '
+                      'and what to do next."[/]')  # fmt: skip
+    for r in rows:
+        say = " or ".join(f"'{t}'" for t in r.triggers)
+        console.print(f"[bold]{r.id}[/] {r.name}  [dim]say {say} · used {r.use_count}×[/]")
+        console.print(f"   {describe(r.steps)}", markup=False, highlight=False)
+
+
+@routines_app.command("rm")
+def routines_rm(routine: Annotated[str, typer.Argument(help="Name or id")]) -> None:
+    """Delete a routine."""
+    from neurovex.routines.store import RoutineStore
+
+    async def go(sessions) -> str | None:  # type: ignore[no-untyped-def]
+        store = RoutineStore(sessions)
+        found = await store.find(routine)
+        return found.name if found and await store.delete(found.id) else None
+
+    name = _with_db(go)
+    if name is None:
+        console.print(f"[red]No routine called[/] {routine}")
+        raise typer.Exit(1)
+    console.print(f"[green]Deleted[/] {name}")
+
+
+# --- audit ----------------------------------------------------------------------
+
+
+@audit_app.command("tail")
+def audit_tail(
+    n: Annotated[int, typer.Option("-n", help="How many entries")] = 20,
+) -> None:
+    """The latest entries: when, who, what, and how it went."""
+    from neurovex.core.clock import local_tz
+    from neurovex.security.audit import AuditLog
+
+    rows = _with_db(lambda sessions: AuditLog(sessions).tail(n))
+    if not rows:
+        console.print("[dim]Nothing recorded yet.[/]")
+    tz = local_tz(get_settings().timezone)
+    for r in rows:
+        when = r.at.astimezone(tz).strftime("%Y-%m-%d %H:%M:%S")
+        color = "green" if r.outcome == "ok" else "yellow"
+        confirmed = " [dim](confirmed)[/]" if r.confirmed else ""
+        console.print(f"{when}  {r.actor:<5} {r.action:<28} [{color}]{r.outcome}[/]{confirmed}")
+
+
+@audit_app.command("verify")
+def audit_verify() -> None:
+    """Check the whole chain; names the first entry that was changed or removed."""
+    from neurovex.security.audit import AuditLog
+
+    verdict = _with_db(lambda sessions: AuditLog(sessions).verify())
+    if verdict.ok:
+        console.print(f"[green]OK[/]: {verdict.entries} entries, the chain is intact.")
+        return
+    console.print(f"[red]Broken[/] at entry {verdict.first_bad_id}: it or the one before it "
+                  "was changed or removed.")  # fmt: skip
+    raise typer.Exit(1)
 
 
 # --- chat -----------------------------------------------------------------------

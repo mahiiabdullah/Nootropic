@@ -243,6 +243,28 @@
   .settings { columns: 320px 3; column-gap: 12px; }
   .settings .panel { break-inside: avoid; margin-bottom: 12px; }
   .scroll-list { max-height: 420px; overflow-y: auto; margin-top: 6px; }
+  .dev-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: center; font-size: 13px; padding: 6px 0; border-bottom: 1px solid var(--border); }
+  .dev-row .m { display: block; font-size: 12px; color: var(--muted); }
+  .rt-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 10px; align-items: center; font-size: 13px; padding: 7px 0; border-bottom: 1px solid var(--border); }
+  .rt-row .m { display: block; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+  .rt-row .x { background: none; border: 0; color: var(--muted); cursor: pointer; font-size: 15px; padding: 0 4px; }
+  .rt-row .x:hover { color: var(--danger); }
+  .perm-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 14px; align-items: center; font-size: 13px; padding: 7px 0; border-bottom: 1px solid var(--border); }
+  .perm-row label { display: inline-flex; align-items: center; gap: 5px; color: var(--text-2); cursor: pointer; }
+  .perm-note { display: block; margin-top: 8px; font-size: 12px; color: var(--muted); }
+  .dev-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+  .paircode { font: 600 22px var(--mono); letter-spacing: .14em; margin: 12px 0 2px; }
+
+  /* Sign-in */
+  .signin { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; padding: 16px; background: var(--bg); }
+  .signin-box { width: min(400px, 100%); background: var(--surface); border: 1px solid var(--border); border-radius: var(--r); padding: 22px 20px; }
+  .signin-box .brand { display: block; padding: 0 0 14px; }
+  .signin-box h1 { margin: 0 0 6px; font-size: 18px; }
+  .signin-box p { margin: 0 0 14px; color: var(--text-2); font-size: 14px; line-height: 1.5; }
+  .signin-box form { display: flex; gap: 8px; }
+  .signin-box .field { flex: 1; min-width: 0; font-size: 15px; }
+  .signin-box .msg-err { margin: 12px 0 0; color: var(--danger); font-size: 13px; }
+  .signin-box code { font: 12px var(--mono); background: var(--surface-2); padding: 1px 5px; border-radius: 4px; }
   .src-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; gap: 8px; align-items: center; font-size: 13px; padding: 5px 0; border-bottom: 1px solid var(--border); content-visibility: auto; contain-intrinsic-size: auto 31px; }
   .src-row:last-of-type { border-bottom: 0; }
   .src-row input { accent-color: var(--accent); margin: 0; }
@@ -371,6 +393,18 @@
 </style>
 </head>
 <body>
+<div class="signin" id="signin" hidden>
+  <div class="signin-box">
+    <div class="brand">NEUROVEX</div>
+    <h1>Sign in</h1>
+    <p>On this PC, run <code>.\nvx signin</code> in the Neurovex folder and open the link it prints. On another device, enter a code from <b>Settings → Devices</b> on a device that's already signed in.</p>
+    <form id="signinForm">
+      <input class="field" id="signinCode" placeholder="Code, e.g. K7QM-4XPA" aria-label="Sign-in code or API token" autocomplete="one-time-code" autocapitalize="characters" spellcheck="false" maxlength="200" required>
+      <button class="btn primary" type="submit">Sign in</button>
+    </form>
+    <p class="msg-err" id="signinMsg" role="alert" hidden></p>
+  </div>
+</div>
 <div class="app">
 <nav class="rail" aria-label="Main">
   <div class="brand">NEUROVEX</div>
@@ -479,6 +513,28 @@
         </div>
       </div>
       <div class="panel">
+        <h4>Devices</h4>
+        <div id="devices"></div>
+        <div class="dev-actions">
+          <button class="btn small" type="button" id="pairBtn">Sign in another device</button>
+          <button class="btn small" type="button" id="signoutBtn">Sign out here</button>
+        </div>
+        <div id="pairBox" hidden>
+          <div class="paircode" id="pairCode"></div>
+          <span class="src" id="pairNote"></span>
+        </div>
+      </div>
+      <div class="panel">
+        <h4>Routines</h4>
+        <div id="routines"></div>
+        <span class="perm-note">Teach one in Ask: "When I say <i>start my day</i>, show my day and what to do next." Saying the phrase runs it straight away, with no AI.</span>
+      </div>
+      <div class="panel">
+        <h4>What chat may do</h4>
+        <div id="perms"></div>
+        <span class="perm-note">This limits Ask only: every page still shows and changes everything. What chat sees is sent to your AI provider.</span>
+      </div>
+      <div class="panel">
         <h4>AI providers <span id="llmStrategy"></span></h4>
         <div id="llm"></div>
       </div>
@@ -559,6 +615,7 @@ const safeUrl = (u) => (/^https?:\/\//i.test(u || "") ? u : "#");
 
 async function api(path, opts = {}) {
   const res = await fetch(path, { ...opts, headers: { "Content-Type": "application/json", "X-Neurovex-Client": "web", ...(opts.headers || {}) } });
+  if (res.status === 401 && path !== "/api/auth/login") showSignin();
   if (!res.ok) {
     let msg = res.statusText;
     try { msg = (await res.json()).detail || msg; } catch {}
@@ -1572,7 +1629,8 @@ function applyTabView() {
   if (view === "memoryView") loadMemory();
   if (view === "tasksView") loadTasks();
   if (view === "todayView") loadToday();
-  if (view === "settingsView") { loadSources().catch(() => {}); loadProviders().catch(() => {}); loadStatus(); }
+  if (view === "settingsView") { loadDevices().catch(() => {}); loadPermissions().catch(() => {}); loadRoutines().catch(() => {}); loadSources().catch(() => {}); loadProviders().catch(() => {}); loadStatus(); }
+  else $("pairBox").hidden = true; // a code isn't left on screen
   if (view === "feed") showNews();
 }
 const NEWS_PANELS_FRESH_MS = 60000;
@@ -1638,6 +1696,88 @@ async function loadProviders() {
   $("llm").replaceChildren(...rows);
 }
 
+// ---- sign-in and devices ------------------------------------------------------------
+function showSignin(message = "") {
+  $("signin").hidden = false;
+  $("signinMsg").textContent = message;
+  $("signinMsg").hidden = !message;
+  $("signinCode").focus();
+}
+$("signinForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  try {
+    await post("/api/auth/login", { secret: $("signinCode").value.trim() });
+    location.replace("/"); // a clean start, signed in
+  } catch (err) {
+    showSignin(err.message);
+    $("signinCode").select();
+  }
+});
+async function loadRoutines() {
+  const list = await api("/api/routines");
+  if (!list.length) return $("routines").replaceChildren(el("span", { class: "src" }, "No routines yet."));
+  $("routines").replaceChildren(...list.map((r) => {
+    const run = el("button", { class: "btn small", type: "button" }, "Run");
+    run.addEventListener("click", () => { selectTab("ask"); sendChat(r.triggers[0]); });
+    const del = el("button", { class: "x", type: "button", title: `Delete ${r.name}`, "aria-label": `Delete ${r.name}` }, "×");
+    del.addEventListener("click", async () => {
+      try { await api(`/api/routines/${r.id}`, { method: "DELETE" }); toast(`Deleted ${r.name}.`); loadRoutines(); } catch (err) { toast(err.message); }
+    });
+    const used = r.use_count ? ` · used ${r.use_count}×` : "";
+    return el("div", { class: "rt-row" },
+      el("div", {}, el("span", {}, r.name), el("span", { class: "m" }, `say "${r.triggers.join('" or "')}"${used}`), el("span", { class: "m" }, r.steps)),
+      run, del);
+  }));
+}
+async function loadPermissions() {
+  const perms = await api("/api/permissions");
+  const modules = [...new Set(perms.map((p) => p.module))];
+  const box = (p, text) => {
+    if (!p) return el("span");
+    const input = el("input", { type: "checkbox", checked: p.granted, "aria-label": `Chat may ${p.label.replace("seeing", "see").replace("changing", "change")}` });
+    input.addEventListener("change", async () => {
+      try {
+        await post(`/api/permissions/${encodeURIComponent(p.permission)}`, { granted: input.checked });
+        toast(input.checked ? `Chat can go back to ${p.label}.` : `Chat stopped ${p.label}.`);
+      } catch (err) { input.checked = !input.checked; toast(err.message); }
+    });
+    return el("label", {}, input, text);
+  };
+  $("perms").replaceChildren(...modules.map((m) => {
+    const read = perms.find((p) => p.module === m && p.kind === "read");
+    const write = perms.find((p) => p.module === m && p.kind === "write");
+    return el("div", { class: "perm-row" }, el("span", {}, (read || write).module_name), box(read, "see"), box(write, "change"));
+  }));
+}
+async function loadDevices() {
+  const rows = (await api("/api/auth/sessions")).map((d) => {
+    const out = el("button", { class: "linkbtn", type: "button" }, "sign out");
+    out.addEventListener("click", async () => {
+      try { await post(`/api/auth/sessions/${d.id}/signout`); } catch (err) { return toast(err.message); }
+      if (d.current) location.reload(); else { toast(`${d.label} signed out.`); loadDevices(); }
+    });
+    const when = new Date(d.created_at).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
+    return el("div", { class: "dev-row" },
+      el("div", {}, el("span", {}, d.label + (d.current ? " · this device" : "")),
+        el("span", { class: "m" }, `signed in ${when} · active ${ago(d.last_seen_at)}`)),
+      out);
+  });
+  $("devices").replaceChildren(...(rows.length ? rows : [el("span", { class: "src" }, "Only scripts with the API token are signed in.")]));
+}
+$("pairBtn").addEventListener("click", async () => {
+  try {
+    const c = await post("/api/auth/code");
+    const until = new Date(c.expires_at).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+    $("pairCode").textContent = c.code;
+    $("pairNote").textContent = `Type this on the other device's sign-in screen. It works once, until ${until}.`;
+    $("pairBox").hidden = false;
+  } catch (err) { toast(err.message); }
+});
+$("signoutBtn").addEventListener("click", async () => {
+  try { await post("/api/auth/logout"); } catch {}
+  location.reload();
+});
+
 function refreshAll() { loadFeed(); loadProfile().catch(() => {}); loadTop().catch(() => {}); loadBriefing(); }
 
 $("refresh").addEventListener("click", async () => {
@@ -1702,8 +1842,14 @@ document.addEventListener("keydown", (e) => {
 });
 
 (async function init() {
-  renderBell();
   applyTheme();
+  const auth = await api("/api/auth/status").catch(() => ({ signed_in: true }));
+  if (!auth.signed_in) {
+    const failed = new URLSearchParams(location.search).get("signin") === "failed";
+    return showSignin(failed ? "That sign-in link didn't work: it was already used or more than 10 minutes old. Run nvx signin again." : "");
+  }
+  if (location.search.includes("signin=")) history.replaceState(null, "", "/");
+  renderBell();
   applyDensity();
   $("minImp").value = store.get("minImp", "");
   $("unread").checked = store.get("unread", false);
