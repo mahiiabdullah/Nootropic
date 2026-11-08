@@ -70,6 +70,34 @@ async def test_guard_blocks_foreign_host_and_headerless_writes(client):
     assert r.status_code == 403 and "X-Neurovex-Client" in r.json()["detail"]
 
 
+async def test_page_is_compressed_and_reused_when_unchanged(client):
+    first = await client.get("/", headers={"Accept-Encoding": "gzip"})
+    assert first.headers["content-encoding"] == "gzip" and first.headers["etag"]
+    again = await client.get("/", headers={"If-None-Match": first.headers["etag"]})
+    assert again.status_code == 304 and again.content == b""
+
+
+async def test_allowed_hosts_open_the_page_at_another_address(settings, fake_summarizer):
+    async def factory(_settings, _http):
+        return fake_summarizer
+
+    listed = settings.model_copy(update={"allowed_hosts": "PC.Tail1234.ts.net, other.lan:8443"})
+    assert listed.extra_hosts() == {"pc.tail1234.ts.net", "other.lan"}
+    app = create_app(listed, factory)
+    async with app.router.lifespan_context(app):
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1") as c:
+            ok = await c.get("/health", headers={"Host": "pc.tail1234.ts.net"})
+            assert ok.status_code == 200
+            blocked = await c.get("/health", headers={"Host": "evil.example"})
+            assert blocked.status_code == 403
+            assert "evil.example" in blocked.json()["detail"]
+            assert "NEUROVEX_ALLOWED_HOSTS" in blocked.json()["detail"]
+            # Writes still need the client header, whatever the address.
+            write = await c.post("/api/news/refresh", headers={"Host": "pc.tail1234.ts.net"})
+            assert write.status_code == 403
+
+
 async def test_refresh_then_browse_bookmark_and_read(client):
     assert (await client.post("/api/news/refresh", headers=HEADERS)).status_code == 202
     st = await wait_for_idle(client)

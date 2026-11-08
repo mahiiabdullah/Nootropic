@@ -28,12 +28,16 @@ secrets_app = typer.Typer(help="Store API keys in the OS keychain.", no_args_is_
 llm_app = typer.Typer(help="AI providers: status, tests, models, setup.", no_args_is_help=True)
 memory_app = typer.Typer(help="What Neurovex remembers about you.", no_args_is_help=True)
 tasks_app = typer.Typer(help="Your tasks: add, list, done, what's next.")
+autostart_app = typer.Typer(help="Start Neurovex when you sign in (Windows).", no_args_is_help=True)
 app.add_typer(news_app, name="news")
 news_app.add_typer(sources_app, name="sources")
 app.add_typer(secrets_app, name="secrets")
 app.add_typer(llm_app, name="llm")
 app.add_typer(memory_app, name="memory")
 app.add_typer(tasks_app, name="tasks")
+app.add_typer(autostart_app, name="autostart")
+
+SERVER_LOG_MAX_BYTES = 5 * 2**20
 
 # Windows consoles default to a legacy code page; article titles need UTF-8.
 for _stream in (sys.stdout, sys.stderr):
@@ -96,12 +100,23 @@ def serve(
 
     settings = get_settings()
     settings.check_bind_host()
+    if sys.stdout is None or sys.stderr is None:  # no console (pythonw, started at sign-in)
+        _log_to_file(settings)
     if port:  # make the app (and reload workers) see the same port
         os.environ["NEUROVEX_PORT"] = str(port)
         get_settings.cache_clear()
     port = port or settings.port
     console.print(f"[bold #7BA7BC]Neurovex[/] {__version__} → http://{settings.host}:{port}")
     server.run(settings.host, port, reload=reload)
+
+
+def _log_to_file(settings) -> None:  # type: ignore[no-untyped-def]
+    """Send output to <data_dir>/logs/server.log, keeping one older file."""
+    settings.ensure_dirs()
+    log_path = settings.logs_dir / "server.log"
+    if log_path.exists() and log_path.stat().st_size > SERVER_LOG_MAX_BYTES:
+        log_path.replace(log_path.with_suffix(".log.1"))
+    sys.stdout = sys.stderr = open(log_path, "a", encoding="utf-8", buffering=1)  # noqa: SIM115
 
 
 @app.command()
@@ -175,7 +190,118 @@ def doctor() -> None:
     except ImportError:
         pass
     row("News summaries", True, f"news_llm_provider = {settings.news_llm_provider}")
+
+    from neurovex.core.backup import last_backup_at
+
+    if settings.backup_keep == 0:
+        row("Backups", None, "off (NEUROVEX_BACKUP_KEEP=0)")
+    else:
+        last = last_backup_at(settings.backups_dir)
+        where = f"keeping {settings.backup_keep} in {settings.backups_dir}"
+        row("Backups", True if last else None, f"last {_ago(last)} · {where}")
     console.print(table)
+
+
+# --- backups --------------------------------------------------------------------
+
+
+@app.command()
+def backup() -> None:
+    """Back up the database now, then list the backups."""
+    from neurovex.core.backup import backup_now, list_backups
+
+    settings = get_settings()
+    try:
+        made = backup_now(settings.db_path, settings.backups_dir, settings.backup_keep or 1)
+    except (OSError, RuntimeError) as e:
+        console.print(f"[red]Backup failed:[/] {e}")
+        raise typer.Exit(1) from e
+    console.print(f"[green]Backed up[/] → {made}")
+    for path in list_backups(settings.backups_dir):
+        when = datetime.fromtimestamp(path.stat().st_mtime).strftime("%Y-%m-%d %H:%M")
+        console.print(f"  {when}  {path.stat().st_size / 2**20:5.1f} MB  {path.name}")
+    console.print(
+        f"[dim]Restore: stop Neurovex, copy a backup over neurovex.db in {settings.data_dir} "
+        "(delete its -wal and -shm files), then start it again.[/]"
+    )
+
+
+# --- autostart ------------------------------------------------------------------
+
+
+def _server_answers(settings) -> bool:  # type: ignore[no-untyped-def]
+    import httpx
+
+    try:
+        return httpx.get(f"http://127.0.0.1:{settings.port}/health", timeout=2).is_success
+    except httpx.HTTPError:
+        return False
+
+
+def _not_windows() -> None:
+    from neurovex.core.autostart import PROJECT_DIR, SYSTEMD_UNIT
+
+    console.print(
+        "Autostart is for Windows. On Linux, save this as "
+        "~/.config/systemd/user/neurovex.service, then run "
+        "`systemctl --user enable --now neurovex`:\n"
+    )
+    console.print(SYSTEMD_UNIT.format(workdir=PROJECT_DIR), markup=False, highlight=False)
+    raise typer.Exit(1)
+
+
+@autostart_app.command("on")
+def autostart_on() -> None:
+    """Start Neurovex at every sign-in, without a window, and start it now."""
+    from neurovex.core import autostart
+
+    if not autostart.supported():
+        _not_windows()
+    settings = get_settings()
+    try:
+        autostart.register()
+        console.print("[green]Autostart on:[/] Neurovex starts when you sign in.")
+        if _server_answers(settings):
+            console.print("It's already running; the next sign-in starts it automatically.")
+        else:
+            autostart.run_now()
+            console.print(f"Started → http://127.0.0.1:{settings.port}")
+    except autostart.AutostartError as e:
+        console.print(f"[red]Couldn't set up autostart:[/] {e}")
+        raise typer.Exit(1) from e
+    log_file = settings.logs_dir / "server.log"
+    console.print(f"[dim]Output: {log_file} · turn off: nvx autostart off[/]")
+
+
+@autostart_app.command("off")
+def autostart_off() -> None:
+    """Stop the background copy and don't start at sign-in any more."""
+    from neurovex.core import autostart
+
+    if not autostart.supported():
+        _not_windows()
+    try:
+        removed = autostart.unregister()
+    except autostart.AutostartError as e:
+        console.print(f"[red]Couldn't remove autostart:[/] {e}")
+        raise typer.Exit(1) from e
+    console.print("[green]Autostart off.[/] The background copy was stopped." if removed
+                  else "Autostart was already off.")  # fmt: skip
+
+
+@autostart_app.command("status")
+def autostart_status() -> None:
+    """Whether Neurovex starts at sign-in, and whether it's running now."""
+    from neurovex.core import autostart
+
+    if not autostart.supported():
+        _not_windows()
+    settings = get_settings()
+    console.print(f"Starts at sign-in: {'[green]yes[/]' if autostart.is_registered() else 'no'}")
+    up = _server_answers(settings)
+    console.print(
+        f"Running now: {'[green]yes[/]' if up else 'no'} (http://127.0.0.1:{settings.port})"
+    )
 
 
 # --- secrets --------------------------------------------------------------------

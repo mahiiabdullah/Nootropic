@@ -66,6 +66,14 @@ class Settings(BaseSettings):
     host: str = "127.0.0.1"
     port: int = 8765
     allow_remote: bool = False
+    # Extra names the page may be opened at, comma-separated, e.g. your Tailscale address
+    # "pc.tailnet-name.ts.net". The server still listens on this computer only.
+    allowed_hosts: str = ""
+
+    # Daily copy of the database. 0 = no backups. Empty dir = <data_dir>/backups; point it
+    # at a synced folder (OneDrive, Google Drive) to keep a copy off this computer.
+    backup_keep: int = Field(default=7, ge=0)
+    backup_dir: Path | None = None
 
     # --- LLM providers ---------------------------------------------------------------
     # Order = priority. Free cloud providers by default; add "anthropic" (paid) or
@@ -171,6 +179,15 @@ class Settings(BaseSettings):
     @property
     def logs_dir(self) -> Path:
         return self.data_dir / "logs"
+
+    @property
+    def backups_dir(self) -> Path:
+        return self.backup_dir or self.data_dir / "backups"
+
+    def extra_hosts(self) -> frozenset[str]:
+        """`allowed_hosts` as bare lowercase names (any port is ignored)."""
+        names = (h.strip().lower() for h in self.allowed_hosts.split(","))
+        return frozenset(n.rsplit(":", 1)[0] if n.count(":") == 1 else n for n in names if n)
 
     def ensure_dirs(self) -> None:
         self.data_dir.mkdir(parents=True, exist_ok=True)

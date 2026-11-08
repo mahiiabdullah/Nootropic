@@ -8,13 +8,15 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Request
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, Response, StreamingResponse
+from starlette.middleware.gzip import GZipMiddleware
 
 from neurovex import __version__
 from neurovex.api.guard import LocalGuardMiddleware
 from neurovex.conversation.api import router as chat_router
 from neurovex.conversation.builtins import builtin_skills
 from neurovex.conversation.engine import ChatEngine
+from neurovex.core.backup import BackupModule
 from neurovex.core.config import Settings, get_settings
 from neurovex.core.db import create_engine, create_sessionmaker, init_db
 from neurovex.core.live import sse_stream
@@ -97,11 +99,14 @@ def create_app(
         today = TodayModule(settings, TodayBrief(sessions, tasks.store, app.state.memory))
         await today.start()
         app.state.today = today
+        backups = BackupModule(settings)
+        await backups.start()
         log.info("neurovex_ready", version=__version__, profile=settings.profile.value,
                  url=f"http://{settings.host}:{settings.port}")  # fmt: skip
         try:
             yield
         finally:
+            await backups.stop()
             await today.stop()
             await tasks.stop()
             await news.stop()
@@ -110,7 +115,11 @@ def create_app(
             log.info("neurovex_stopped")
 
     app = FastAPI(title="Neurovex", version=__version__, lifespan=lifespan)
-    app.add_middleware(LocalGuardMiddleware, allow_remote=settings.allow_remote)
+    app.add_middleware(
+        LocalGuardMiddleware, allow_remote=settings.allow_remote, extra_hosts=settings.extra_hosts()
+    )
+    # Pages and JSON shrink by about three quarters; the live-event stream is never compressed.
+    app.add_middleware(GZipMiddleware, minimum_size=1024)
     app.include_router(news_router)
     app.include_router(llm_router_api)
     app.include_router(chat_router)
@@ -145,7 +154,13 @@ def create_app(
         )
 
     @app.get("/", include_in_schema=False)
-    async def index() -> FileResponse:
-        return FileResponse(WEB_DIR / "index.html")
+    async def index(request: Request) -> Response:
+        # The browser asks each time and gets "unchanged" unless the page was edited.
+        path = WEB_DIR / "index.html"
+        st = path.stat()
+        headers = {"ETag": f'"{st.st_mtime_ns:x}-{st.st_size:x}"', "Cache-Control": "no-cache"}
+        if request.headers.get("if-none-match") == headers["ETag"]:
+            return Response(status_code=304, headers=headers)
+        return FileResponse(path, headers=headers)
 
     return app

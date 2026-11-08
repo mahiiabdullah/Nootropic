@@ -3,7 +3,8 @@
 Any website you visit can send requests to http://127.0.0.1:<port>. Two checks
 stop that from being abused:
 
-1. Host header must be a loopback name. This blocks DNS-rebinding attacks.
+1. Host header must be a loopback name, or one you listed in `NEUROVEX_ALLOWED_HOSTS`
+   (such as your Tailscale address). This blocks DNS-rebinding attacks.
 2. State-changing requests must carry `X-Neurovex-Client`. Browsers can't add a
    custom header cross-origin without a CORS preflight, and this app grants no
    CORS, so a hostile page can't trigger refreshes or edit data.
@@ -25,9 +26,12 @@ SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
 
 
 class LocalGuardMiddleware:
-    def __init__(self, app: ASGIApp, allow_remote: bool = False) -> None:
+    def __init__(
+        self, app: ASGIApp, allow_remote: bool = False, extra_hosts: frozenset[str] = frozenset()
+    ) -> None:
         self.app = app
         self.allow_remote = allow_remote
+        self.hosts = LOOPBACK_HOSTS | extra_hosts
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
@@ -36,10 +40,12 @@ class LocalGuardMiddleware:
         headers = Headers(scope=scope)
         if not self.allow_remote:
             host = (headers.get("host") or "").rsplit(":", 1)[0].lower()
-            if host not in LOOPBACK_HOSTS:
-                await JSONResponse({"detail": "Host not allowed"}, status_code=403)(
-                    scope, receive, send
+            if host not in self.hosts:
+                detail = (
+                    f"Host not allowed: {host[:100]}. To open Neurovex at this address, "
+                    "add it to NEUROVEX_ALLOWED_HOSTS and restart."
                 )
+                await JSONResponse({"detail": detail}, status_code=403)(scope, receive, send)
                 return
         if scope["method"] not in SAFE_METHODS and not headers.get(CLIENT_HEADER):
             await JSONResponse({"detail": f"Missing {CLIENT_HEADER} header"}, status_code=403)(
