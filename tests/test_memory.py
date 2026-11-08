@@ -13,7 +13,7 @@ from neurovex.main import create_app
 from neurovex.memory.recall import MAX_CHARS, recall
 from neurovex.memory.skills import memory_skills
 from neurovex.memory.store import MemoryStore, fts_query, looks_secret, similarity
-from tests.conftest import FakeSummarizer
+from tests.conftest import FakeSummarizer, signed_in
 from tests.test_llm import router_for
 
 HEADERS = {"X-Neurovex-Client": "test"}
@@ -237,7 +237,9 @@ async def test_memory_api(settings):
     app = create_app(settings, factory, llm=router_for(settings, {"groq": []}))
     async with app.router.lifespan_context(app):
         transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1") as c:
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://127.0.0.1", headers=signed_in(settings)
+        ) as c:
             assert (await c.post("/api/memory", json={"text": "Likes tea"})).status_code == 403
             r = await c.post(
                 "/api/memory",

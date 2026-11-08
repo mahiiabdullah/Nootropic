@@ -8,7 +8,7 @@ import pytest
 import respx
 
 from neurovex.main import create_app
-from tests.conftest import hours_ago, rss
+from tests.conftest import hours_ago, rss, signed_in
 
 HEADERS = {"X-Neurovex-Client": "test"}
 
@@ -30,7 +30,9 @@ async def client(settings, fake_summarizer):
         )
         async with app.router.lifespan_context(app):
             transport = httpx.ASGITransport(app=app)
-            async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1") as c:
+            async with httpx.AsyncClient(
+                transport=transport, base_url="http://127.0.0.1", headers=signed_in(settings)
+            ) as c:
                 yield c
 
 
@@ -86,7 +88,9 @@ async def test_allowed_hosts_open_the_page_at_another_address(settings, fake_sum
     app = create_app(listed, factory)
     async with app.router.lifespan_context(app):
         transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1") as c:
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://127.0.0.1", headers=signed_in(settings)
+        ) as c:
             ok = await c.get("/health", headers={"Host": "pc.tail1234.ts.net"})
             assert ok.status_code == 200
             blocked = await c.get("/health", headers={"Host": "evil.example"})

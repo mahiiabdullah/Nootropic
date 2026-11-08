@@ -13,7 +13,7 @@ from neurovex.llm.errors import RateLimited
 from neurovex.llm.ratelimit import RateGate
 from neurovex.main import build_chat, create_app
 from neurovex.modules.news.module import NewsModule
-from tests.conftest import FakeSummarizer, hours_ago, rss
+from tests.conftest import FakeSummarizer, hours_ago, rss, signed_in
 from tests.test_llm import router_for
 
 
@@ -227,7 +227,9 @@ async def test_chat_api(settings):
     headers = {"X-Neurovex-Client": "test"}
     async with app.router.lifespan_context(app):
         transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1") as c:
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://127.0.0.1", headers=signed_in(settings)
+        ) as c:
             assert (await c.post("/api/chat", json={"message": "hi"})).status_code == 403
             r = await c.post("/api/chat", json={"message": "hi"}, headers=headers)
             body = r.json()

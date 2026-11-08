@@ -111,3 +111,10 @@ class FakeSummarizer:
 @pytest.fixture
 def fake_summarizer() -> FakeSummarizer:
     return FakeSummarizer()
+
+
+def signed_in(settings: Settings) -> dict[str, str]:
+    """Headers for a test client: the API token, as a script would send it."""
+    from neurovex.security.auth import load_api_token
+
+    return {"Authorization": f"Bearer {load_api_token(settings)}"}
