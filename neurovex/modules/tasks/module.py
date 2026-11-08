@@ -17,15 +17,24 @@ from neurovex.core.config import Settings
 from neurovex.core.db import utcnow
 from neurovex.core.live import Broadcaster
 from neurovex.core.logging import get_logger
+from neurovex.core.modules import ModuleManifest
 from neurovex.modules.tasks.models import Task
 from neurovex.modules.tasks.planner import PRIORITY_NAMES, due_label
 from neurovex.modules.tasks.store import TaskStore
 
 log = get_logger(__name__)
 
+MANIFEST = ModuleManifest(
+    id="tasks",
+    name="Tasks",
+    description="To-dos, reminders and what to do next.",
+    permissions=["tasks.read", "tasks.write"],
+)
+
 
 class TasksModule:
     module_id = "tasks"
+    manifest = MANIFEST
 
     def __init__(self, settings: Settings, sessions: async_sessionmaker[AsyncSession]) -> None:
         self.settings = settings

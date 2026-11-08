@@ -30,6 +30,11 @@ def builtin_skills(router: LLMRouter, tz_name: str = "") -> list[Skill]:
         return SkillResult(ok=True, summary="Checked AI providers", data=providers)
 
     return [
-        Skill("system.time", "Current local date and time.", now),
-        Skill("system.ai_status", "Health and rate budget of Neurovex's AI providers.", ai_status),
+        Skill("system.time", "Current local date and time.", now, permissions=[]),
+        Skill(
+            "system.ai_status",
+            "Health and rate budget of Neurovex's AI providers.",
+            ai_status,
+            permissions=[],
+        ),  # fmt: skip
     ]

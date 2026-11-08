@@ -67,5 +67,6 @@ def today_skills(brief: TodayBrief) -> list[Skill]:
             "today.brief",
             "The user's day at a glance: tasks due, what to do first, top stories, goals.",
             overview,
+            permissions=["tasks.read", "news.read", "memory.read"],  # it shows all three
         )
     ]

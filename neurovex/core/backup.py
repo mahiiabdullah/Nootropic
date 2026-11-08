@@ -18,6 +18,7 @@ from pathlib import Path
 
 from neurovex.core.config import Settings
 from neurovex.core.logging import get_logger
+from neurovex.core.modules import ModuleManifest
 
 log = get_logger(__name__)
 
@@ -66,8 +67,13 @@ def backup_now(db_path: Path, folder: Path, keep: int, now: datetime | None = No
     return target
 
 
+MANIFEST = ModuleManifest(id="backups", name="Backups", description="A daily copy of the database.")
+
+
 class BackupModule:
     """Makes a backup once a day while the app runs (and soon after start if one is due)."""
+
+    manifest = MANIFEST
 
     def __init__(self, settings: Settings) -> None:
         self.settings = settings

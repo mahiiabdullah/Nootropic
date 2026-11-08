@@ -70,6 +70,8 @@ async def init_db(engine: AsyncEngine) -> None:
     import neurovex.memory.models as memory_models
     import neurovex.modules.news.models  # noqa: F401
     import neurovex.modules.tasks.models  # noqa: F401
+    import neurovex.routines.models  # noqa: F401
+    import neurovex.security.models  # noqa: F401
     import neurovex.today.models  # noqa: F401
 
     async with engine.begin() as conn:

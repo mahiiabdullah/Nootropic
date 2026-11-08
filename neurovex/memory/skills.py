@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
+from neurovex.core.modules import ModuleManifest
 from neurovex.core.skills import Skill, SkillResult
 from neurovex.memory.models import KINDS
 from neurovex.memory.store import MemoryStore
@@ -17,6 +18,14 @@ class SearchParams(BaseModel):
 
 class ListParams(BaseModel):
     kind: str | None = Field(default=None, description=f"One of {', '.join(KINDS)}")
+
+
+MANIFEST = ModuleManifest(
+    id="memory",
+    name="Memory",
+    description="What Neurovex knows about you, recalled into chat.",
+    permissions=["memory.read", "memory.write"],
+)
 
 
 def memory_skills(store: MemoryStore) -> list[Skill]:

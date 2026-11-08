@@ -17,15 +17,24 @@ from neurovex.core.config import Settings
 from neurovex.core.db import utcnow
 from neurovex.core.live import Broadcaster
 from neurovex.core.logging import get_logger
+from neurovex.core.modules import ModuleManifest
 from neurovex.modules.news import fetcher, store
 from neurovex.modules.news.pipeline import AlreadyRunning, NewsPipeline
 from neurovex.modules.news.summarizer import SummarizerFactory
 
 log = get_logger(__name__)
 
+MANIFEST = ModuleManifest(
+    id="news",
+    name="News",
+    description="Feeds and X accounts, summarized and ranked for you.",
+    permissions=["news.read", "news.write"],
+)
+
 
 class NewsModule:
     module_id = "news"
+    manifest = MANIFEST
 
     def __init__(
         self,

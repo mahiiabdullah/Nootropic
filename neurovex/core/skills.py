@@ -32,6 +32,18 @@ class Risk(StrEnum):
 
 
 NEEDS_CONFIRMATION = {Risk.DESTRUCTIVE, Risk.EXTERNAL, Risk.EXEC}
+# The permission a skill needs by default: "<module>.<this>" (see security/permissions.py)
+RISK_PERMISSION = {Risk.READ: "read", Risk.LOCAL_WRITE: "write", Risk.DESTRUCTIVE: "write",
+                   Risk.EXTERNAL: "external", Risk.EXEC: "exec"}  # fmt: skip
+
+
+def permission_label(permission: str) -> str:
+    """'tasks.write' → 'changing tasks', for messages people read."""
+    module, _, kind = permission.partition(".")
+    verb = {"read": "seeing", "write": "changing"}.get(kind, kind)
+    return f"{verb} {module}"
+
+
 _SHORT_TYPES = {"string": "str", "integer": "int", "boolean": "bool", "number": "float",
                 "array": "list"}  # fmt: skip
 
@@ -66,6 +78,8 @@ class SkillResult:
 
 
 Handler = Callable[[BaseModel], Awaitable[SkillResult]]
+# (actor, skill id, params, outcome, confirmed): the audit log's append
+Recorder = Callable[..., Awaitable[None]]
 
 
 @dataclass
@@ -76,11 +90,19 @@ class Skill:
     params: type[BaseModel] = NoParams
     risk: Risk = Risk.READ
     examples: list[str] = field(default_factory=list)
+    # None: the module's permission for this risk ("tasks.write"); [] needs none.
+    permissions: list[str] | None = None
 
     @property
     def group(self) -> str:
         """The module a skill belongs to: "news" for "news.search"."""
         return self.id.split(".", 1)[0]
+
+    @property
+    def needs(self) -> list[str]:
+        if self.permissions is not None:
+            return self.permissions
+        return [f"{self.group}.{RISK_PERMISSION[self.risk]}"]
 
     def schema(self) -> dict[str, Any]:
         s = self.params.model_json_schema()
@@ -118,9 +140,19 @@ class Skill:
 
 
 class SkillRegistry:
-    def __init__(self) -> None:
+    def __init__(
+        self, audit: Recorder | None = None, allowed: Callable[[str], bool] | None = None
+    ) -> None:
         self._skills: dict[str, Skill] = {}
         self._hints: dict[str, re.Pattern[str]] = {}
+        self._audit = audit
+        self._allowed = allowed  # None: everything is allowed (tests, tools)
+
+    def denied(self, skill: Skill) -> list[str]:
+        """The permissions this skill needs that the user has turned off."""
+        if self._allowed is None:
+            return []
+        return [p for p in skill.needs if not self._allowed(p)]
 
     def register(self, skill: Skill) -> None:
         if skill.id in self._skills:
@@ -162,20 +194,42 @@ class SkillRegistry:
         return "\n".join(lines)
 
     async def execute(
-        self, skill_id: str, args: dict[str, Any] | str | None, confirmed: bool = False
+        self,
+        skill_id: str,
+        args: dict[str, Any] | str | None,
+        confirmed: bool = False,
+        actor: str = "chat",
     ) -> SkillResult:
+        """Run a skill. Every call, whatever its outcome, goes to the audit log."""
+        result, outcome = await self._run(skill_id, args, confirmed)
+        if self._audit is not None:
+            await self._audit(actor, skill_id, args, outcome, confirmed)
+        return result
+
+    async def _run(
+        self, skill_id: str, args: dict[str, Any] | str | None, confirmed: bool
+    ) -> tuple[SkillResult, str]:
         skill = self._skills.get(skill_id)
         if skill is None:
-            return SkillResult.fail(f"Unknown tool '{skill_id}'. Use one of the listed tools.")
+            msg = f"Unknown tool '{skill_id}'. Use one of the listed tools."
+            return SkillResult.fail(msg), "unknown_skill"
+        if off := self.denied(skill):
+            what = ", ".join(map(permission_label, off))
+            msg = (f"The user has turned off {what} for chat (Settings → What chat may do). "
+                   "Tell them, and don't try another way.")  # fmt: skip
+            return SkillResult.fail(msg), "denied"
         if skill.risk in NEEDS_CONFIRMATION and not confirmed:
-            return SkillResult.fail(f"'{skill_id}' needs the user's confirmation first.")
+            msg = f"'{skill_id}' needs the user's confirmation first."
+            return SkillResult.fail(msg), "needs_confirmation"
         try:
             raw = json.loads(args) if isinstance(args, str) and args.strip() else (args or {})
             params = skill.params.model_validate(raw)
         except (json.JSONDecodeError, ValidationError) as e:
-            return SkillResult.fail(f"Invalid arguments for {skill_id}: {_explain(e)}")
+            return SkillResult.fail(f"Invalid arguments for {skill_id}: {_explain(e)}"), "invalid"
         try:
-            return await skill.handler(params)
+            result = await skill.handler(params)
         except Exception as e:  # a broken skill must not break the conversation
             log.exception("skill_failed", skill=skill_id)
-            return SkillResult.fail(f"{skill_id} failed: {type(e).__name__}: {str(e)[:200]}")
+            msg = f"{skill_id} failed: {type(e).__name__}: {str(e)[:200]}"
+            return SkillResult.fail(msg), "error"
+        return result, "ok" if result.ok else "failed"

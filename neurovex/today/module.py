@@ -17,10 +17,18 @@ from neurovex.core.config import Settings
 from neurovex.core.db import utcnow
 from neurovex.core.live import Broadcaster
 from neurovex.core.logging import get_logger
+from neurovex.core.modules import ModuleManifest
 from neurovex.today.brief import TodayBrief
 from neurovex.today.models import DailyBrief
 
 log = get_logger(__name__)
+
+MANIFEST = ModuleManifest(
+    id="today",
+    name="Today",
+    description="The day at a glance, from tasks, news and memory.",
+    depends_on=["tasks", "news", "memory"],
+)
 
 CHECK_S = 30
 ANNOUNCE_WINDOW = timedelta(hours=6)
@@ -37,6 +45,7 @@ def in_window(now_local: datetime, brief_time: str) -> bool:
 
 class TodayModule:
     module_id = "today"
+    manifest = MANIFEST
 
     def __init__(self, settings: Settings, brief: TodayBrief) -> None:
         self.settings = settings

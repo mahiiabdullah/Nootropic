@@ -214,6 +214,18 @@ class Settings(BaseSettings):
     def llm_concurrency_for(self, provider_id: str) -> int:
         return self.llm_max_concurrency or PROVIDERS[provider_id].max_concurrency
 
+    def secret_source(self, name: str) -> str | None:
+        """Where `secret(name)` finds a value: environment, .env or keychain (never the value)."""
+        if os.environ.get(name, "").strip() or os.environ.get(f"NEUROVEX_{name}", "").strip():
+            return "environment"
+        if self.profile is Profile.TEST:
+            return None
+        if _dotenv().get(name) or _dotenv().get(f"NEUROVEX_{name}"):
+            return ".env"
+        if self.use_keyring and get_secret(name):
+            return "keychain"
+        return None
+
     def secret(self, *names: str) -> str | None:
         """First non-empty value for any of `names` (see module docstring for order)."""
         for name in names:
