@@ -16,6 +16,7 @@ never costs an extra model call.
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from functools import cache
 from pathlib import Path
@@ -36,6 +37,7 @@ from neurovex.llm.types import JSONRequest
 from neurovex.memory.models import KINDS
 from neurovex.memory.recall import recall
 from neurovex.memory.store import MemoryStore
+from neurovex.routines.store import Match, RoutineStore, render
 
 log = get_logger(__name__)
 
@@ -176,12 +178,19 @@ class ChatEngine:
         sessions: async_sessionmaker[AsyncSession],
         memory: MemoryStore | None = None,
         tz_name: str = "",
+        allowed: Callable[[str], bool] | None = None,
+        routines: RoutineStore | None = None,
     ) -> None:
         self.router = router
         self.skills = skills
         self.sessions = sessions
         self.memory = memory
         self.tz_name = tz_name
+        self._allowed = allowed  # Settings → What chat may do (None: everything)
+        self.routines = routines
+
+    def may(self, permission: str) -> bool:
+        return self._allowed is None or self._allowed(permission)
 
     def system_prompt(self, groups: set[str] | None = None) -> str:
         """Persona + protocol. `groups` limits full tool signatures to those groups (the
@@ -214,18 +223,15 @@ class ChatEngine:
         # The question is saved with its answer (below), so searching past conversations
         # during this turn never finds the question itself.
 
-        previous_user = next((m.content for m in reversed(history) if m.role == "user"), "")
-        remembered = await recall(self.memory, text, previous_user) if self.memory else None
-        # Follow-ups ("move it to friday") keep the tools the last answer used.
-        last = next((m for m in reversed(history) if m.role == "assistant"), None)
-        sticky = {st["tool"].split(".")[0] for st in (last.steps or [])} if last else set()
-        groups = self.skills.groups_for(text, sticky)
-        turn = await self._run(
-            text, history, conv_id, remembered.block if remembered else "", groups
+        hit = (
+            await self.routines.match(text)
+            if self.routines is not None and self.may("routines.read")
+            else None
         )
-        turn.conversation_id = conv_id
-        if remembered and remembered.relevant_ids:
-            await self.memory.mark_used(remembered.relevant_ids)  # type: ignore[union-attr]
+        if hit is not None:  # the fast path: a taught routine runs with no AI call
+            turn = await self._run_routine(hit, conv_id)
+        else:
+            turn = await self._think(text, history, conv_id)
         async with self.sessions() as s:
             s.add(ChatMessage(conversation_id=conv_id, role="user", content=text))
             s.add(
@@ -243,6 +249,53 @@ class ChatEngine:
             conv = await s.get_one(ChatConversation, conv_id)
             conv.updated_at = utcnow()
             await s.commit()
+        return turn
+
+    async def _run_routine(self, hit: Match, conversation_id: int) -> ChatTurn:
+        """Run each step in order through the registry (permissions and audit apply), and
+        stop at the first one that fails or needs your confirmation."""
+        routine = hit.routine
+        now = local_now(self.tz_name)
+        turn = ChatTurn(conversation_id=conversation_id, reply="", model="routine")
+        lines = []
+        for st in routine.steps:
+            args = render(st.get("args") or {}, hit.said, now)
+            outcome = await self.skills.execute(st["tool"], args, actor="routine")
+            turn.steps.append({"tool": st["tool"], "args": json.dumps(args, ensure_ascii=False),
+                               "ok": outcome.ok, "summary": outcome.summary})  # fmt: skip
+            if outcome.display:
+                turn.cards.append(outcome.display)
+            if not outcome.ok:
+                lines.append(f"- ✕ {outcome.summary}")
+                lines.append("\nStopped here. Ask me directly to do this step.")
+                turn.error = True
+                break
+            lines.append(f"- {outcome.summary}")
+        await self.routines.mark_used(routine.id)  # type: ignore[union-attr]
+        turn.reply = f"**{routine.name}**\n\n" + "\n".join(lines)
+        return turn
+
+    async def _think(self, text: str, history: list[ChatMessage], conv_id: int) -> ChatTurn:
+        previous_user = next((m.content for m in reversed(history) if m.role == "user"), "")
+        remembered = (
+            await recall(self.memory, text, previous_user)
+            if self.memory and self.may("memory.read")
+            else None
+        )
+        memory_block = remembered.block if remembered else ""
+        if self.memory and not self.may("memory.write"):
+            memory_block += (
+                "\n<note>The user has turned off saving memories: memory changes are ignored, "
+                "so don't say you'll remember anything.</note>"
+            )
+        # Follow-ups ("move it to friday") keep the tools the last answer used.
+        last = next((m for m in reversed(history) if m.role == "assistant"), None)
+        sticky = {st["tool"].split(".")[0] for st in (last.steps or [])} if last else set()
+        groups = self.skills.groups_for(text, sticky)
+        turn = await self._run(text, history, conv_id, memory_block, groups)
+        turn.conversation_id = conv_id
+        if remembered and remembered.relevant_ids:
+            await self.memory.mark_used(remembered.relevant_ids)  # type: ignore[union-attr]
         return turn
 
     async def _run(
@@ -327,7 +380,7 @@ class ChatEngine:
     async def _apply_memory(
         self, ops: list[MemoryOp], conversation_id: int, turn: ChatTurn
     ) -> None:
-        if self.memory is None:
+        if self.memory is None or not self.may("memory.write"):
             return
         for op in ops:
             if op.op == "add":
