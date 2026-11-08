@@ -121,7 +121,7 @@ Example: you say *"Remind me to call the dentist tomorrow at 6, and what did I d
                  audit + cost records; bus.publish("conversation.turn_completed", timings)
 ```
 
-**Fast path** (step 4) exists so common, deterministic things never pay for an LLM call:
+**Fast path** (step 4) exists so common, deterministic things never pay for an LLM call (routine triggers are built, D-034):
 - `/commands` typed in chat (`/focus 25`, `/log sleep 7.5`)
 - Procedural workflow triggers (fuzzy match with `rapidfuzz` + embedding similarity, threshold 0.85)
 - Exact confirmations ("yes", "go ahead", "cancel") when a confirmation is pending
@@ -242,6 +242,7 @@ subscriptions: [ritual.morning_brief.requested, ritual.evening_reflection.reques
 ```
 
 - The module manager discovers modules in `neurovex/modules/*/manifest.yaml`, checks permissions, and starts them in dependency order. A module that fails to start is marked `degraded`. It never crashes core.
+- **As built (D-033):** manifests are Python constants (`MANIFEST` next to each module) and modules are listed in `main.create_app` rather than discovered, since all of them ship with Neurovex. A module's permissions are `<id>.read` and `<id>.write`; each skill needs the one matching its risk unless it lists its own (`today.brief` needs the three reads it shows). They limit chat only, never the pages.
 - **Hot reload:** not built in. `uvicorn --reload` handles development. Real plugin hot-reload is backlog.
 - **Context providers** let modules contribute short, relevant lines to the system prompt ("Current focus session: 'Report draft', 18 min left"), each with a token budget.
 
@@ -448,7 +449,8 @@ async def suggest_break(evt, ctx) -> Suggestion | None:
 
 ### Components
 - **Permissions:** declared in module manifests. Granted on first use through a UI prompt and stored in `permissions_granted`. Checked at the skill-execution boundary (one place, impossible to forget).
-- **Audit log:** `audit_log(id, ts, actor, action, params_hash, outcome, confirmed_by_user, prev_hash, hash)` where `hash = sha256(prev_hash ‖ canonical_json(entry))`. Params are hashed, not stored in plaintext. Sensitive details live in the domain tables, which are encrypted.
+- **Sign-in (built):** browsers hold a session cookie (HttpOnly, SameSite=Strict, stored only as a hash) made from a one-time code (`nvx signin`, or Settings → Devices) or the API token; scripts send `Authorization: Bearer <token>`. Idle devices are signed out after 90 days, and 10 wrong tries in 10 minutes pause sign-in. Local requests get no exemption, because Tailscale Serve forwards remote devices from loopback.
+- **Audit log (built):** `audit_log(id, at, actor, action, params_hash, outcome, confirmed, prev_hash, hash)` where `hash = sha256(prev_hash | the entry's fields)`. Params are hashed, not stored in plaintext. Sensitive details live in the domain tables, which are encrypted.
 - **Encryption at rest (Phase 9):** SQLCipher with a key derived by Argon2id from your passphrase, or a random key protected by Windows DPAPI / Windows Hello if you prefer no passphrase. The **Phase 0 spike** checks that `sqlite-vec` loads under SQLCipher. If it doesn't, the fallback is AES-GCM field-level encryption of content columns + BitLocker.
 - **Vault:** auto-locks after 30 min of inactivity. Locked means cloud calls and memory reads pause until you unlock.
 - **Privacy controls:** retention per memory type, redaction ("forget everything about X"), export-all (JSON + attachments as a zip), nuke (delete the DB, vectors, logs, backups and keychain entries, with a typed confirmation).

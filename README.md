@@ -26,9 +26,27 @@ uv run nvx doctor
 uv run nvx serve
 ```
 
-Then open http://127.0.0.1:8765.
+Then sign this browser in:
+
+```powershell
+uv run nvx signin    # prints a one-time link; open it
+```
 
 On a server, set keys as environment variables and add `NEUROVEX_USE_KEYRING=false`. `.env.example` lists every setting.
+
+## Routines
+
+Teach Neurovex a phrase in Ask: "When I say *start my day*, show my day and what to do next." After that, saying "start my day" runs those steps at once, with no AI call. Words after the phrase can fill a step: teach "when I say *add groceries*, add a task to buy what I say", then say "add groceries oat milk".
+
+Routines are listed in **Settings → Routines**, where you can run or delete them, and with `.\nvx routines`. A routine stops at any step that fails or needs your confirmation.
+
+## Signing in
+
+Every browser signs in once. On this PC, run `.\nvx signin` and open the link it prints. To add a phone, open **Settings → Devices** on a signed-in device, choose **Sign in another device**, and type the code on the phone. Codes work once, for 10 minutes. The same panel lists signed-in devices and signs any of them out.
+
+Scripts use the API token instead: `.\nvx token` prints it, to send as `Authorization: Bearer <token>`. `.\nvx token --new` replaces it.
+
+Everything chat does, and every sign-in, is recorded in a tamper-evident audit log. `.\nvx audit tail` shows the latest entries, and `.\nvx audit verify` checks that none were changed or removed.
 
 ## Keep it running
 
@@ -48,13 +66,13 @@ To restore, stop Neurovex, copy a backup over `neurovex.db` in the data folder, 
 
 ## Use it from your phone (Tailscale)
 
-Neurovex has no login yet, so never put it on the open internet. [Tailscale](https://tailscale.com) is free for personal use and connects only your own devices.
+Keep Neurovex off the open internet: sign-in protects it, but there's no need to expose it. [Tailscale](https://tailscale.com) is free for personal use and connects only your own devices.
 
 1. Install Tailscale on this PC and your phone, and sign in to both with the same account.
 2. In the Tailscale admin console, under DNS, turn on MagicDNS and HTTPS certificates.
 3. On this PC, run `tailscale serve --bg 8765`. It prints your address, such as `https://pc.tail1234.ts.net`.
 4. Put that name in `.env` as `NEUROVEX_ALLOWED_HOSTS=pc.tail1234.ts.net`, then restart Neurovex with `.\nvx autostart off` and `.\nvx autostart on`.
-5. Open the address on your phone. Only devices signed in to your Tailscale account can reach it.
+5. Open the address on your phone and sign in with a code from **Settings → Devices**. Only devices signed in to your Tailscale account can reach it at all.
 
 If a page says "Host not allowed", the message names the address to add.
 

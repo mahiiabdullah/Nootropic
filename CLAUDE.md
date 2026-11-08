@@ -11,6 +11,7 @@ Ryzen 9 9900X, **no discrete GPU**, **15 GB RAM**. AI runs on **Puku AI only** (
 - `uv run nvx serve` → API + web UI at http://127.0.0.1:8765
 - `uv run nvx doctor` → environment checks
 - `uv run nvx autostart on | off | status` → start at Windows sign-in with no window (Task Scheduler; output in `<data_dir>/logs/server.log`)
+- `uv run nvx signin` (one-time sign-in link and code) · `nvx token [--new]` (API token for scripts) · `nvx audit tail | verify` · `nvx secrets list`
 - `uv run nvx backup` → back up the database now (it also backs up daily on its own, `core/backup.py`)
 - `uv run nvx news refresh | list [--sort for_you|latest|importance] | show ID | digest | briefing [--new]`
 - `uv run nvx news follow X | mute X | unfollow X | interests` (personal layer) · `nvx news sources list|add|add-x|enable|disable|remove`
@@ -25,11 +26,16 @@ Ryzen 9 9900X, **no discrete GPU**, **15 GB RAM**. AI runs on **Puku AI only** (
 
 ## Layout
 - `neurovex/core/` config (pydantic-settings, `NEUROVEX_` env prefix), logging (structlog + secret redaction), db (SQLite WAL, `UTCDateTime` type)
-- `neurovex/api/guard.py` loopback Host check (plus `NEUROVEX_ALLOWED_HOSTS`, e.g. a Tailscale name) + `X-Neurovex-Client` header required on writes (until token auth, P0.3)
+- `neurovex/api/guard.py` loopback Host check (plus `NEUROVEX_ALLOWED_HOSTS`, e.g. a Tailscale name) + `X-Neurovex-Client` header required on writes
+- `neurovex/api/auth.py` + `neurovex/security/auth.py` sign-in: everything except `/`, `/health` and the sign-in endpoints needs a session cookie (browsers, from one-time codes) or `Authorization: Bearer <API token>` (keychain, or `<data_dir>/api_token`); no loopback exemption, since Tailscale Serve arrives from loopback (D-032). Tests sign in with `tests.conftest.signed_in(settings)`
+- `neurovex/security/audit.py` hash-chained audit log: every `SkillRegistry.execute` (params hashed, never stored) and every sign-in event
 - `neurovex/core/backup.py` daily SQLite backups (keep 7) · `neurovex/core/autostart.py` Windows sign-in task
-- `neurovex/core/skills.py` skill registry: Pydantic params, risk levels (destructive/external/exec need confirmation), never raises
+- `neurovex/core/skills.py` skill registry: Pydantic params, risk levels (destructive/external/exec need confirmation), permissions (`Skill.needs`: `<module>.read|write` from the risk, or `permissions=[...]`), never raises
+- `neurovex/core/modules.py` `ModuleManifest` (a Python constant per module: id, name, permissions, depends_on) + `ModuleManager` (dependency order; a failing module is `degraded`, never fatal). New modules: a `MANIFEST`, then `modules.add(...)` or `modules.declare(...)` in `main.create_app`
+- `neurovex/security/permissions.py` what chat may see/change (Settings → What chat may do): checked in `SkillRegistry.execute`, plus `memory.read`/`memory.write` in the chat engine (recall, memory ops). Pages aren't limited. `/api/skills`, `/api/permissions`, `/api/system/modules`
 - `neurovex/llm/` AI layer: `catalog.py` (provider specs + defaults + rate hints), `providers.py` (OpenAI-compatible client with JSON-mode downgrade, `MessagesProvider` for Anthropic-format gateways like Puku, Anthropic SDK, Ollama), `ratelimit.py` (`RateGate`: rpm/tpm window + learns x-ratelimit-* headers), `router.py` (priority/round-robin, pacing with `max_wait_s`, `reserve_tokens` headroom for background work, cooldowns, health), `usage.py` (`llm_calls` table), `api.py` (/api/llm)
 - `neurovex/conversation/` Ask Neurovex: `engine.py` (provider-neutral JSON step protocol: use_tool | respond, max 4 steps; `then` = more calls in one step; a reply on a change-only step ends the turn; full tool signatures only for the groups a request needs, via `SkillRegistry.hint`), `prompts/` (persona, protocol), `builtins.py`, `api.py` (/api/chat), tables `chat_*`. App assembly (skills from each module) in `main.build_chat`.
+- `neurovex/routines/` routines you teach in chat ("when I say X, do Y then Z"): `store.py` (strict trigger match: whole message, a typo away, or trigger + `{{input}}`; templates `{{input}}`/`{{date}}`/`{{time}}`), `skills.py` (`routines.save` checks each step against the registry), `api.py` (/api/routines). The fast path in `ChatEngine.ask` runs a matched routine through `SkillRegistry.execute` (permissions + audit, actor `routine`) with **no AI call**, stopping at the first failing or unconfirmed step. `nvx routines [rm]`
 - `neurovex/memory/` what Neurovex knows about the user: `memories` table + FTS5 index (`core.db.ensure_fts`), `store.py` (CRUD, dedupe, secret filter, BM25 search, past-chat search), `recall.py` (budgeted `<memory>` block: instructions + preferences + pinned + importance-3, then keyword-relevant), `skills.py`, `api.py` (/api/memory). Writes ride on chat steps (`memory` ops), never a separate LLM call.
 - `neurovex/core/clock.py` the user's local time (`NEUROVEX_TIMEZONE`, else this computer's); `neurovex/core/live.py` SSE broadcaster, merged for pages at `/api/events`
 - `neurovex/modules/tasks/` to-dos: `dates.py` (quick-add and date parsing, deterministic), `planner.py` (buckets, labels, the "what now" advisor, pure functions, no AI), `store.py`, `module.py` (reminder loop), `skills.py`, `api.py` (/api/tasks)

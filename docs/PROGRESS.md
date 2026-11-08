@@ -10,14 +10,14 @@
   - "New since your last visit".
   - Your interests are summarized first.
 - AI: Puku only, through its `/v1/messages` endpoint (D-026). Other providers stay in the catalog, off.
-- A partial Phase 0 exists (config, logging, SQLite, localhost guard, skill registry). Still missing from P0.1–P0.3: Alembic, event bus, module manager, permissions, audit log, token auth.
+- Phase 0 is built except what nothing needs yet (D-033): config, logging, SQLite, localhost guard, sign-in, audit log, skill registry, module manifests and manager, permissions. Deferred: Alembic and the persisted event bus.
 - **Ask Neurovex** chat (web Ask tab + `nvx chat`) answers with skills over the news module.
 - **Memory** (Phase 2, first version): remembers you across conversations at no extra AI cost (D-025).
 - **Today** (Phase 7, first version): the home screen, composed locally with no AI calls (D-029).
 - **Tasks** (Phase 5, first version): to-dos, plain-words quick-add, "what should I do now" advisor, repeats and reminders, in the web UI, `nvx tasks` and chat (D-027).
 - X accounts can be followed as news sources, free (D-030).
 - The web UI is organized into six sections with a dark theme by default.
-- 252 tests passing, ruff clean.
+- 292 tests passing, ruff clean.
 
 ## Done
 - 2026-10-09: Master plan, architecture, decisions and build prompts (PLAN.md, docs/).
@@ -100,6 +100,9 @@
   - Verified on a copy of the real DB: @OpenAI and @karpathy added through the page in Edge; their own recent posts arrived with replies, reposts and posts over 3 days old left out; Puku summarized a real post without inventing detail. No horizontal overflow at 1400 or 390 px.
 
 - 2026-11-05: News source filter gained "X (all accounts)". X filters also show posts the AI judged not relevant.
+- 2026-11-09: Routines (D-034). Teach one in Ask ("when I say start my day, show my day and what to do next"); saying the phrase runs the steps with no AI call. Words after the phrase fill `{{input}}`. Listed in Settings → Routines (run, delete) and `nvx routines`. Verified with Puku: teaching took 2 AI calls, running 0.
+- 2026-11-09: Module system (P0.2, D-033). Each module has a manifest; the module manager starts them in order, and one that fails is marked degraded instead of stopping Neurovex. Settings → What chat may do lets you stop chat seeing or changing news, tasks or memory (pages are unaffected), checked wherever chat acts. `/api/skills` lists every capability.
+- 2026-11-09: Sign-in and audit log (P0.3, D-032). Every API call needs a signed-in browser or the API token. Browsers sign in once with a one-time code (`nvx signin`, or Settings → Devices for a phone), and the Devices panel signs any device out. Every chat action and sign-in goes into a hash-chained audit log (`nvx audit verify`). Also `nvx token` and `nvx secrets list`.
 - 2026-11-09: Lighter background work. X accounts are checked by how recently they posted (every 30 minutes if they posted today, down to every 6 hours if quiet for a week), and each run checks only its share, so runs no longer wait on all 299 at once. Measured before: about 14,350 checks a day and runs of up to 12 minutes. X checks no longer hold up the feeds. Articles are cut to 4,000 characters before summarizing, down from 8,000. Pages and JSON are compressed, and the page is reused when unchanged.
 - 2026-11-09: Running day to day: `nvx autostart` starts Neurovex at sign-in with no window, the database is backed up daily (7 kept, verified), and `NEUROVEX_ALLOWED_HOSTS` lets your Tailscale address open the page (D-031).
 - 2026-11-06: UI reworked for speed and density: tighter cards, a one-line List view, a searchable source picker, data fetched per section, the feed left alone while you read, keyboard shortcuts, filters remembered.
@@ -117,8 +120,8 @@
 
 ## Next
 1. Watch Puku's quota: Neurovex can't see it. Up to 25 summaries per refresh, every 10 minutes, come out of the same plan as chat. If it runs short, lower `NEUROVEX_NEWS_MAX_SUMMARIES_PER_RUN` or raise `NEUROVEX_NEWS_REFRESH_MINUTES`.
-2. Continue with P0.1–P0.3 from docs/PROMPTS.md, folding the news module into the module system (manifest, skills `news.digest` / `news.briefing` / `news.follow`, events onto the shared bus).
-3. Candidates: routines ("when I say 'start my day', do X then Y"), evening reflection, API token auth (P0.3, needed before any public server), then the desktop app (Phase 3) and voice (Phase 4), which need installs and your decisions.
+2. Candidates: scheduled routines ("every weekday at 8", needs the scheduler and somewhere to deliver results), evening reflection, then the desktop app (Phase 3) and voice (Phase 4), which need installs and your decisions.
+3. Alembic arrives with the first schema change `create_all` can't make (D-033).
 4. Later: embeddings (`nomic-embed-text`) for "more like this" by meaning, not just shared topics.
 
 ## Known issues
@@ -132,8 +135,7 @@
 - Free tiers are small and change without notice. The router fails over and cools down automatically, but if every provider is limited, summaries pause (articles keep their retries) until the soonest cooldown ends.
 - Provider defaults verified 2026-10-10. Model names drift; check with `nvx llm models <id>`.
 - Cloudflare's OpenAI-compatible JSON mode isn't documented, so Cloudflare uses prompt-only JSON. Hugging Face gives free accounts very small monthly credits.
-- Production: no token auth on the API yet (P0.3). Don't expose the server publicly (`NEUROVEX_ALLOW_REMOTE`) except behind an authenticating reverse proxy.
+- Sign-in protects the API, but there's no TLS of its own: reach it remotely only through Tailscale (HTTPS) or another HTTPS proxy, never plain HTTP over the internet.
 - Schema: only *nullable* column additions are automatic. Anything else needs Alembic (P0.1) or a DB reset.
 - Refresh loop is a plain asyncio task; moves to APScheduler in P6.1.
-- No token auth yet (P0.3). The API is protected by the loopback Host check and the `X-Neurovex-Client` header on writes. The SSE stream is read-only.
 - Desktop notifications need the web page open (the Tauri shell in Phase 3 will make them native).

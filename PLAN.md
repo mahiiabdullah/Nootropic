@@ -172,7 +172,7 @@ Wk 25-26  P9 HARDEN & SHIP                                                   █
 - [x] Local full-text recall (FTS5): budgeted `<memory>` block per turn, plus search over past conversations
 - [x] Atomic memories, smart updates, duplicate merging, secret filter
 - [x] Memory tab (view/search/add/edit/pin/forget) + `nvx memory` CLI + `/api/memory`
-- [ ] Routines you teach it ("when I say 'start my day', do X then Y"), the procedural memory from ARCHITECTURE §9
+- [x] Routines you teach it ("when I say 'start my day', do X then Y"), the procedural memory from ARCHITECTURE §9 (D-034)
 - [ ] Embedding search for synonyms (only if keyword recall proves too narrow)
 
 ### Phase 7 · Today: first version ✅ (2026-11-04, D-029)
@@ -229,7 +229,7 @@ Wk 25-26  P9 HARDEN & SHIP                                                   █
 - [ ] Working memory (per session, token-aware, with rolling summary)
 - [ ] Episodic store (SQLite + `sqlite-vec`), recall by meaning + time + importance
 - [ ] Semantic store: a facts graph with provenance, confidence and `valid_from`/`valid_to` (facts can change)
-- [ ] Procedural store: workflows (teach mode: "when I say X, do Y then Z"), fuzzy triggers
+- [x] Procedural store: workflows (teach mode: "when I say X, do Y then Z"), fuzzy triggers (built early as routines, D-034)
 - [ ] Memory Nexus: post-turn extraction (background), retrieval scoring, context injection under a token budget
 - [ ] Nightly consolidation: dedupe facts, decay importance, summarize the day
 - [ ] Memory API (`/api/memory/...`): list, search, edit, forget
