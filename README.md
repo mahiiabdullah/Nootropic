@@ -30,7 +30,33 @@ Then open http://127.0.0.1:8765.
 
 On a server, set keys as environment variables and add `NEUROVEX_USE_KEYRING=false`. `.env.example` lists every setting.
 
-Neurovex has no login yet, so don't expose it to the internet. It only accepts local connections by default.
+## Keep it running
+
+```powershell
+.\nvx autostart on       # start at every sign-in, with no window (and start it now)
+.\nvx autostart status
+.\nvx autostart off      # stop it and don't start at sign-in
+```
+
+Output goes to `%LOCALAPPDATA%\Neurovex\logs\server.log`. It stops while the PC sleeps. On Linux, `nvx autostart on` prints a systemd unit to use instead.
+
+## Backups
+
+The database is copied every day to `%LOCALAPPDATA%\Neurovex\backups`, and the last 7 copies are kept. Run `.\nvx backup` to make one now. To keep copies off this PC, set `NEUROVEX_BACKUP_DIR` to a synced folder such as OneDrive.
+
+To restore, stop Neurovex, copy a backup over `neurovex.db` in the data folder, delete the `-wal` and `-shm` files next to it, and start Neurovex again.
+
+## Use it from your phone (Tailscale)
+
+Neurovex has no login yet, so never put it on the open internet. [Tailscale](https://tailscale.com) is free for personal use and connects only your own devices.
+
+1. Install Tailscale on this PC and your phone, and sign in to both with the same account.
+2. In the Tailscale admin console, under DNS, turn on MagicDNS and HTTPS certificates.
+3. On this PC, run `tailscale serve --bg 8765`. It prints your address, such as `https://pc.tail1234.ts.net`.
+4. Put that name in `.env` as `NEUROVEX_ALLOWED_HOSTS=pc.tail1234.ts.net`, then restart Neurovex with `.\nvx autostart off` and `.\nvx autostart on`.
+5. Open the address on your phone. Only devices signed in to your Tailscale account can reach it.
+
+If a page says "Host not allowed", the message names the address to add.
 
 ## Common commands
 
@@ -41,6 +67,7 @@ uv run nvx news refresh         # fetch and summarize news now
 uv run nvx tasks                # task overview
 uv run nvx memory list          # what Neurovex remembers
 uv run nvx llm status           # AI provider health
+uv run nvx backup               # back up the database now
 ```
 
 ## Project layout

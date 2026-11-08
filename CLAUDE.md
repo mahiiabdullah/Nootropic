@@ -10,6 +10,8 @@ Ryzen 9 9900X, **no discrete GPU**, **15 GB RAM**. AI runs on **Puku AI only** (
 - In PowerShell without an activated venv, use the launcher: `.\nvx <command>` (runs `.venv\Scripts\nvx.exe`)
 - `uv run nvx serve` → API + web UI at http://127.0.0.1:8765
 - `uv run nvx doctor` → environment checks
+- `uv run nvx autostart on | off | status` → start at Windows sign-in with no window (Task Scheduler; output in `<data_dir>/logs/server.log`)
+- `uv run nvx backup` → back up the database now (it also backs up daily on its own, `core/backup.py`)
 - `uv run nvx news refresh | list [--sort for_you|latest|importance] | show ID | digest | briefing [--new]`
 - `uv run nvx news follow X | mute X | unfollow X | interests` (personal layer) · `nvx news sources list|add|add-x|enable|disable|remove`
 - `uv run nvx chat ["question"]` → Ask Neurovex (interactive, or one-shot)
@@ -23,7 +25,8 @@ Ryzen 9 9900X, **no discrete GPU**, **15 GB RAM**. AI runs on **Puku AI only** (
 
 ## Layout
 - `neurovex/core/` config (pydantic-settings, `NEUROVEX_` env prefix), logging (structlog + secret redaction), db (SQLite WAL, `UTCDateTime` type)
-- `neurovex/api/guard.py` loopback Host check + `X-Neurovex-Client` header required on writes (until token auth, P0.3)
+- `neurovex/api/guard.py` loopback Host check (plus `NEUROVEX_ALLOWED_HOSTS`, e.g. a Tailscale name) + `X-Neurovex-Client` header required on writes (until token auth, P0.3)
+- `neurovex/core/backup.py` daily SQLite backups (keep 7) · `neurovex/core/autostart.py` Windows sign-in task
 - `neurovex/core/skills.py` skill registry: Pydantic params, risk levels (destructive/external/exec need confirmation), never raises
 - `neurovex/llm/` AI layer: `catalog.py` (provider specs + defaults + rate hints), `providers.py` (OpenAI-compatible client with JSON-mode downgrade, `MessagesProvider` for Anthropic-format gateways like Puku, Anthropic SDK, Ollama), `ratelimit.py` (`RateGate`: rpm/tpm window + learns x-ratelimit-* headers), `router.py` (priority/round-robin, pacing with `max_wait_s`, `reserve_tokens` headroom for background work, cooldowns, health), `usage.py` (`llm_calls` table), `api.py` (/api/llm)
 - `neurovex/conversation/` Ask Neurovex: `engine.py` (provider-neutral JSON step protocol: use_tool | respond, max 4 steps; `then` = more calls in one step; a reply on a change-only step ends the turn; full tool signatures only for the groups a request needs, via `SkillRegistry.hint`), `prompts/` (persona, protocol), `builtins.py`, `api.py` (/api/chat), tables `chat_*`. App assembly (skills from each module) in `main.build_chat`.
@@ -33,7 +36,7 @@ Ryzen 9 9900X, **no discrete GPU**, **15 GB RAM**. AI runs on **Puku AI only** (
 - `neurovex/today/` home screen, above the modules like `conversation` (may read from all of them): `brief.py` (composes tasks, news, memory; no AI calls), `module.py` (once-a-day announcement), `skills.py`, `api.py` (/api/today)
 - `neurovex/modules/news/` first module: fetcher → pipeline → summarizer (`RouterSummarizer` → `neurovex.llm` router) → store → api/module; `skills.py` exposes news to chat
   - personal layer: `personalize.py` (scoring + learning, pure functions), `briefing.py`, `catalog.py` (verified feeds)
-  - `xsource.py` public X accounts as sources, free (no key, no login, no paid X API; D-030): FxTwitter's API finds new posts; `xtf` (x-tweet-fetcher, pinned to a reviewed commit) reads X Articles in full and timelines through an optional Nitter (`NEUROVEX_X_NITTER_URL`). Never use its browser backend
+  - `xsource.py` public X accounts as sources; checked by how recently each posted (`check_every`), with each run taking only its share (`pick_due`), free (no key, no login, no paid X API; D-030): FxTwitter's API finds new posts; `xtf` (x-tweet-fetcher, pinned to a reviewed commit) reads X Articles in full and timelines through an optional Nitter (`NEUROVEX_X_NITTER_URL`). Never use its browser backend
   - schema stopgap: `core/db.py::_add_missing_columns` adds new *nullable* columns on start
 - `neurovex/web/index.html` single-file UI (vanilla JS; render untrusted text with `textContent` only). Six sections in a side rail (bottom bar on phones): Today, News (with sub-tabs), Tasks, Ask, Memory, Settings; a section with its own view goes in `VIEWS`. Fetch only what the current section shows (`applyTabView`, `refreshVisible`); never replace the feed while it's being read; long lists search or cap instead of rendering everything. Dark by default; theme tokens on `:root` plus light copies. Check dark and light, and 1400 / 850 / 390 px
 - `tests/` offline: feeds mocked with respx, LLM faked. The anthropic 1.x SDK uses httpx2, so respx can't intercept it; inject a fake client instead.

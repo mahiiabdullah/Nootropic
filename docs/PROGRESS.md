@@ -17,7 +17,7 @@
 - **Tasks** (Phase 5, first version): to-dos, plain-words quick-add, "what should I do now" advisor, repeats and reminders, in the web UI, `nvx tasks` and chat (D-027).
 - X accounts can be followed as news sources, free (D-030).
 - The web UI is organized into six sections with a dark theme by default.
-- 235 tests passing, ruff clean.
+- 252 tests passing, ruff clean.
 
 ## Done
 - 2026-10-09: Master plan, architecture, decisions and build prompts (PLAN.md, docs/).
@@ -100,6 +100,8 @@
   - Verified on a copy of the real DB: @OpenAI and @karpathy added through the page in Edge; their own recent posts arrived with replies, reposts and posts over 3 days old left out; Puku summarized a real post without inventing detail. No horizontal overflow at 1400 or 390 px.
 
 - 2026-11-05: News source filter gained "X (all accounts)". X filters also show posts the AI judged not relevant.
+- 2026-11-09: Lighter background work. X accounts are checked by how recently they posted (every 30 minutes if they posted today, down to every 6 hours if quiet for a week), and each run checks only its share, so runs no longer wait on all 299 at once. Measured before: about 14,350 checks a day and runs of up to 12 minutes. X checks no longer hold up the feeds. Articles are cut to 4,000 characters before summarizing, down from 8,000. Pages and JSON are compressed, and the page is reused when unchanged.
+- 2026-11-09: Running day to day: `nvx autostart` starts Neurovex at sign-in with no window, the database is backed up daily (7 kept, verified), and `NEUROVEX_ALLOWED_HOSTS` lets your Tailscale address open the page (D-031).
 - 2026-11-06: UI reworked for speed and density: tighter cards, a one-line List view, a searchable source picker, data fetched per section, the feed left alone while you read, keyboard shortcuts, filters remembered.
 - 2026-11-06: Now following 299 X accounts on AI, each checked to exist and be active. A full check takes about 10 minutes every 30, and FxTwitter wrongly answers "no such account" for about 2% of checks; those clear on the next run.
 
